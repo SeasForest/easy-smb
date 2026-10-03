@@ -83,14 +83,13 @@ class ShizukuManager {
             else -> ShizukuState.PermissionRequired
         }
         _state.value = newState
-        // Reattach to a service that is still running from a previous app session.
-        if (newState is ShizukuState.Ready && _service.value == null) bindService()
     }
 
     fun requestPermission() {
         if (Shizuku.pingBinder()) Shizuku.requestPermission(PERMISSION_REQUEST_CODE)
     }
 
+    /** Binds the service, starting its process if it isn't already running. */
     fun bindService() {
         if (_state.value is ShizukuState.Ready) Shizuku.bindUserService(serviceArgs, connection)
     }

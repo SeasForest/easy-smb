@@ -27,9 +27,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -76,19 +78,41 @@ fun MainScreen(viewModel: MainViewModel) {
 
 @Composable
 private fun ShizukuCard(state: ShizukuState, onRequestPermission: () -> Unit) {
+    val context = LocalContext.current
+    val shizukuLaunchIntent = remember {
+        context.packageManager.getLaunchIntentForPackage(SHIZUKU_PACKAGE)
+    }
     SectionCard("Shizuku") {
         val text = when (state) {
-            ShizukuState.NotRunning -> "Shizuku is not running. Install Shizuku and start it, " +
-                "then come back to this app."
-            ShizukuState.Unsupported -> "This Shizuku version is too old. Please update Shizuku."
-            ShizukuState.PermissionRequired -> "Easy SMB needs permission to use Shizuku."
-            ShizukuState.PermissionDenied -> "Permission was denied. Grant it from the Shizuku app."
-            is ShizukuState.Ready -> "Connected, running as " +
-                if (state.uid == 0) "root." else "shell (uid ${state.uid})."
+            ShizukuState.NotRunning -> if (shizukuLaunchIntent == null) {
+                "Shizuku is not installed. Install it from shizuku.rikka.app or Google Play, " +
+                    "then start it with wireless debugging or root."
+            } else {
+                "Shizuku is installed but not running. Open Shizuku and start it, then come back."
+            }
+            ShizukuState.Unsupported -> "This Shizuku version is too old. Update Shizuku to v11 or newer."
+            ShizukuState.PermissionRequired -> "Easy SMB needs Shizuku permission to read the " +
+                "shared folder and run the server."
+            ShizukuState.PermissionDenied -> "Shizuku permission was denied. Allow Easy SMB in " +
+                "the Shizuku app under \"Authorized applications\"."
+            is ShizukuState.Ready -> if (state.uid == 0) {
+                "Ready. Running as root."
+            } else {
+                "Ready. Running as shell (uid ${state.uid}), so the server needs a port of 1024 or above."
+            }
         }
         Text(text)
-        if (state == ShizukuState.PermissionRequired) {
-            Button(onClick = onRequestPermission) { Text("Grant permission") }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (state == ShizukuState.PermissionRequired) {
+                Button(onClick = onRequestPermission) { Text("Grant permission") }
+            }
+            val showOpen = state == ShizukuState.NotRunning || state == ShizukuState.PermissionDenied ||
+                state == ShizukuState.Unsupported
+            if (showOpen && shizukuLaunchIntent != null) {
+                OutlinedButton(onClick = { context.startActivity(shizukuLaunchIntent) }) {
+                    Text("Open Shizuku")
+                }
+            }
         }
     }
 }
@@ -179,14 +203,20 @@ private fun ShareCard(
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(8.dp))
+            // Kept as text so the field can be cleared while typing; invalid input maps to 0,
+            // which validation reports.
+            var portText by rememberSaveable { mutableStateOf(config.port.toString()) }
             OutlinedTextField(
-                value = if (config.port == 0) "" else config.port.toString(),
+                value = portText,
                 onValueChange = { value ->
-                    value.ifEmpty { "0" }.toIntOrNull()?.let { port -> onChange { it.copy(port = port) } }
+                    val digits = value.filter(Char::isDigit).take(5)
+                    portText = digits
+                    onChange { it.copy(port = digits.toIntOrNull() ?: 0) }
                 },
                 label = { Text("Port") },
                 enabled = editable,
                 singleLine = true,
+                isError = config.port !in ShareConfig.MIN_PORT..ShareConfig.MAX_PORT,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.width(110.dp),
             )
@@ -222,3 +252,5 @@ private fun SectionCard(title: String, content: @Composable () -> Unit) {
         }
     }
 }
+
+private const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"

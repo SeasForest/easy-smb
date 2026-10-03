@@ -22,6 +22,11 @@ class StoragePathsTest {
     }
 
     @Test
+    fun keepsLiteralPlusInFolderNames() {
+        assertEquals("/storage/emulated/0/C++", StoragePaths.treeUriToPath("${base}primary%3AC++"))
+    }
+
+    @Test
     fun mapsRemovableVolume() {
         assertEquals("/storage/1234-ABCD/Music", StoragePaths.treeUriToPath("${base}1234-ABCD%3AMusic"))
     }

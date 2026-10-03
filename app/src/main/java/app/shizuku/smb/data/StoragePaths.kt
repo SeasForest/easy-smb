@@ -14,7 +14,9 @@ object StoragePaths {
     fun treeUriToPath(uri: String): String? {
         val prefix = "content://$EXTERNAL_STORAGE_AUTHORITY/tree/"
         if (!uri.startsWith(prefix)) return null
-        val docId = URLDecoder.decode(uri.removePrefix(prefix).substringBefore('/'), "UTF-8")
+        // URLDecoder treats '+' as a space; document IDs only use %-escapes, so keep '+' literal.
+        val encodedId = uri.removePrefix(prefix).substringBefore('/').replace("+", "%2B")
+        val docId = URLDecoder.decode(encodedId, "UTF-8")
         val volume = docId.substringBefore(':')
         val relative = docId.substringAfter(':', "").trim('/')
         val root = when {

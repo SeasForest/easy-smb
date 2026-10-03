@@ -39,11 +39,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         shizuku.register()
         viewModelScope.launch {
-            // Pick up the state of a service left running by a previous app session.
+            // Reattach to the service if the user left the server on in a previous app session.
+            shizuku.state.collect { state ->
+                if (state is ShizukuState.Ready && store.serverEnabled && shizuku.service.value == null) {
+                    shizuku.bindService()
+                }
+            }
+        }
+        viewModelScope.launch {
             shizuku.service.collect { service ->
-                val running = service?.let { runCatching { it.isRunning }.getOrNull() } ?: false
-                val message = service?.let { runCatching { it.status }.getOrNull() }
-                _server.update { it.copy(running = running, message = message ?: it.message) }
+                if (service == null) {
+                    _server.update { it.copy(running = false) }
+                    return@collect
+                }
+                if (_server.value.busy) return@collect
+                val running = runCatching { service.isRunning }.getOrDefault(false)
+                if (!running && store.serverEnabled) {
+                    // The service process was restarted (e.g. Shizuku restarted); start again.
+                    startServer()
+                } else {
+                    val message = runCatching { service.status }.getOrNull()
+                    _server.update { it.copy(running = running, message = message ?: it.message) }
+                }
             }
         }
     }
@@ -56,6 +73,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun startServer() {
         val config = _config.value
         config.validate().firstOrNull()?.let { error ->
+            store.serverEnabled = false
             _server.update { it.copy(message = error) }
             return
         }
@@ -70,6 +88,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 shizuku.service.filterNotNull().first()
             }
             if (service == null) {
+                store.serverEnabled = false
                 _server.update { ServerState(message = "Could not start the Shizuku service") }
                 return@launch
             }
@@ -82,14 +101,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     config.password,
                     config.readOnly,
                 )
+                store.serverEnabled = error == null
                 _server.value = ServerState(running = error == null, message = error ?: service.status)
             } catch (e: RemoteException) {
+                store.serverEnabled = false
                 _server.value = ServerState(message = "Service error: ${e.message}")
             }
         }
     }
 
     fun stopServer() {
+        store.serverEnabled = false
         runCatching { shizuku.service.value?.stop() }
         shizuku.removeService()
         _server.value = ServerState(message = "Stopped")
