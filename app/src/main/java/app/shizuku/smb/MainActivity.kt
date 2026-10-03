@@ -26,5 +26,11 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         // Shizuku may have been started or stopped while we were in the background.
         viewModel.shizuku.refresh()
+        viewModel.setVisible(true)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        viewModel.setVisible(false)
     }
 }

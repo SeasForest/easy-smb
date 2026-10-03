@@ -1,26 +1,31 @@
 package app.shizuku.smb.service
 
 import android.os.Process
+import android.util.Log
 import app.shizuku.smb.IShareService
 import app.shizuku.smb.data.ShareConfig
+import app.shizuku.smb.server.SmbConfig
+import app.shizuku.smb.server.SmbServer
 import java.io.File
 import java.io.IOException
-import java.net.InetSocketAddress
-import java.net.ServerSocket
+import java.text.SimpleDateFormat
+import java.util.ArrayDeque
+import java.util.Date
+import java.util.Locale
 import kotlin.system.exitProcess
 
 /**
  * Shizuku user service. Shizuku starts this class in its own process running as the shell
- * (or root) uid, which is what lets it read folders the app itself can't reach.
- *
- * The SMB protocol isn't implemented yet: [start] checks that the folder is accessible and the
- * port can be bound from this process, then reports that the server is ready to be wired up.
+ * (or root) uid, which is what lets it read folders the app itself can't reach. It hosts the
+ * SMB server.
  */
 class ShareService : IShareService.Stub() {
 
-    @Volatile private var running = false
+    @Volatile private var server: SmbServer? = null
     @Volatile private var status = "Idle"
     private val myUid = Process.myUid()
+    private val logLines = ArrayDeque<String>()
+    private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.US)
 
     override fun destroy() {
         stop()
@@ -38,7 +43,7 @@ class ShareService : IShareService.Stub() {
         password: String,
         readOnly: Boolean,
     ): String? {
-        if (running) return "Server is already running"
+        if (server?.isRunning == true) return "Server is already running"
         val config = ShareConfig(sharePath, shareName, port, username, password, readOnly)
         config.validate().firstOrNull()?.let { return fail(it) }
 
@@ -51,30 +56,59 @@ class ShareService : IShareService.Stub() {
                 return fail("Folder is not writable as uid $myUid: $sharePath")
         }
 
+        val smb = SmbServer(
+            SmbConfig(
+                rootPath = sharePath,
+                shareName = shareName,
+                username = username,
+                password = password,
+                readOnly = readOnly,
+                port = port,
+            ),
+            logger = ::addLog,
+        )
         try {
-            ServerSocket().use { it.bind(InetSocketAddress(port)) }
+            smb.start()
         } catch (e: IOException) {
             return fail("Cannot listen on port $port as uid $myUid: ${e.message}")
         }
-
-        running = true
-        status = "Checks passed for \\\\device\\$shareName on port $port " +
-            "(uid $myUid). SMB protocol not implemented yet."
+        server = smb
+        status = "Sharing $sharePath" + if (readOnly) " (read-only)" else ""
         return null
     }
 
     @Synchronized
     override fun stop() {
-        running = false
+        server?.stop()
+        server = null
         status = "Stopped"
     }
 
-    override fun isRunning(): Boolean = running
+    override fun isRunning(): Boolean = server?.isRunning == true
 
     override fun getStatus(): String = status
 
+    override fun getClientCount(): Int = server?.connectionCount ?: 0
+
+    override fun getLog(): String = synchronized(logLines) { logLines.joinToString("\n") }
+
+    private fun addLog(message: String) {
+        Log.i(TAG, message)
+        synchronized(logLines) {
+            // SimpleDateFormat isn't thread-safe; clients log from their own threads.
+            logLines.addLast(timeFormat.format(Date()) + "  " + message)
+            while (logLines.size > MAX_LOG_LINES) logLines.removeFirst()
+        }
+    }
+
     private fun fail(message: String): String {
         status = message
+        addLog(message)
         return message
+    }
+
+    private companion object {
+        const val TAG = "EasySmb"
+        const val MAX_LOG_LINES = 50
     }
 }

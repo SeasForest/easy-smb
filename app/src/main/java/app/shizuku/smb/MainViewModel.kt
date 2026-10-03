@@ -8,6 +8,8 @@ import app.shizuku.smb.data.SettingsStore
 import app.shizuku.smb.data.ShareConfig
 import app.shizuku.smb.shizuku.ShizukuManager
 import app.shizuku.smb.shizuku.ShizukuState
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,6 +25,8 @@ data class ServerState(
     val running: Boolean = false,
     val busy: Boolean = false,
     val message: String? = null,
+    val clientCount: Int = 0,
+    val log: String = "",
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -35,6 +39,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _server = MutableStateFlow(ServerState())
     val server: StateFlow<ServerState> = _server.asStateFlow()
+
+    private var pollJob: Job? = null
 
     init {
         shizuku.register()
@@ -102,7 +108,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     config.readOnly,
                 )
                 store.serverEnabled = error == null
-                _server.value = ServerState(running = error == null, message = error ?: service.status)
+                _server.value = ServerState(
+                    running = error == null,
+                    message = error ?: service.status,
+                    log = service.log.orEmpty(),
+                )
             } catch (e: RemoteException) {
                 store.serverEnabled = false
                 _server.value = ServerState(message = "Service error: ${e.message}")
@@ -114,7 +124,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         store.serverEnabled = false
         runCatching { shizuku.service.value?.stop() }
         shizuku.removeService()
-        _server.value = ServerState(message = "Stopped")
+        _server.update { ServerState(message = "Stopped", log = it.log) }
+    }
+
+    /** Refreshes live server details (clients, activity) while the screen is visible. */
+    fun setVisible(visible: Boolean) {
+        pollJob?.cancel()
+        pollJob = null
+        if (!visible) return
+        pollJob = viewModelScope.launch {
+            while (true) {
+                refreshDetails()
+                delay(POLL_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun refreshDetails() {
+        val service = shizuku.service.value ?: return
+        if (_server.value.busy) return
+        try {
+            val running = service.isRunning
+            val clients = if (running) service.clientCount else 0
+            val log = service.log.orEmpty()
+            _server.update { it.copy(running = running, clientCount = clients, log = log) }
+        } catch (e: RemoteException) {
+            // The service died; ShizukuManager reports the disconnect separately.
+        }
     }
 
     /** IPv4 addresses clients on the local network can connect to. */
@@ -132,5 +168,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private companion object {
         const val SERVICE_TIMEOUT_MS = 10_000L
+        const val POLL_INTERVAL_MS = 2_000L
     }
 }

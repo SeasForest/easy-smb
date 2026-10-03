@@ -19,4 +19,10 @@ interface IShareService {
 
     // Last status line from the service, for display in the UI.
     String getStatus() = 5;
+
+    // Number of connected SMB clients.
+    int getClientCount() = 6;
+
+    // Recent server activity, one event per line, oldest first.
+    String getLog() = 7;
 }

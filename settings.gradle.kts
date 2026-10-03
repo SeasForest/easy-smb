@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "easy-smb"
 include(":app")
+include(":smb")

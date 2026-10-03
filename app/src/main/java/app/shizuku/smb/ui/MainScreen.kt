@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -22,6 +23,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -32,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -72,6 +75,7 @@ fun MainScreen(viewModel: MainViewModel) {
                 editable = !server.running && !server.busy,
                 onChange = viewModel::updateConfig,
             )
+            if (server.log.isNotBlank()) ActivityCard(server.log)
         }
     }
 }
@@ -128,8 +132,13 @@ private fun ServerCard(
 ) {
     SectionCard("Server") {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            val title = when {
+                !server.running -> "Stopped"
+                server.clientCount == 1 -> "Running · 1 client"
+                else -> "Running · ${server.clientCount} clients"
+            }
             Text(
-                if (server.running) "Running" else "Stopped",
+                title,
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.weight(1f),
             )
@@ -141,8 +150,46 @@ private fun ServerCard(
         }
         server.message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         if (server.running) {
+            if (addresses.isEmpty()) {
+                Text("No network connection. Connect to Wi-Fi so other devices can reach this phone.")
+            }
             addresses.forEach { address ->
-                Text("smb://$address:${config.port}/${config.shareName}")
+                SelectionContainer {
+                    Text(
+                        "smb://$address:${config.port}/${config.shareName}",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+            }
+            addresses.firstOrNull()?.let { address ->
+                Text(
+                    "Sign in as \"${config.username}\". Windows 11 (24H2 or newer): " +
+                        "net use Z: \\\\$address\\${config.shareName} /TCPPORT:${config.port} " +
+                        "/USER:${config.username}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActivityCard(log: String) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    SectionCard("Activity") {
+        val lines = log.lines()
+        val shown = if (expanded) lines else lines.takeLast(COLLAPSED_LOG_LINES)
+        SelectionContainer {
+            Text(
+                shown.joinToString("\n"),
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+        if (lines.size > COLLAPSED_LOG_LINES) {
+            TextButton(onClick = { expanded = !expanded }) {
+                Text(if (expanded) "Show less" else "Show all")
             }
         }
     }
@@ -254,3 +301,4 @@ private fun SectionCard(title: String, content: @Composable () -> Unit) {
 }
 
 private const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
+private const val COLLAPSED_LOG_LINES = 5
