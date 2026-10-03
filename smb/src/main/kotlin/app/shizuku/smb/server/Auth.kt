@@ -143,6 +143,10 @@ internal class Ntlm(
     private val serverChallenge = ByteArray(8).also(random::nextBytes)
     private var challengeFlags = 0
 
+    /** Why the last [authenticate] call failed, for the log. */
+    var failure: String = ""
+        private set
+
     class Result(val sessionKey: ByteArray, val user: String, val domain: String, val flags: Int)
 
     fun challenge(negotiate: ByteArray): ByteArray {
@@ -183,7 +187,7 @@ internal class Ntlm(
     /** Returns null if the credentials are wrong or the client used something other than NTLMv2. */
     fun authenticate(message: ByteArray): Result? {
         val r = ByteReader(message)
-        if (!isNtlm(message) || r.i32(8) != 3) return null
+        if (!isNtlm(message) || r.i32(8) != 3) return null.also { failure = "not an NTLM AUTHENTICATE message" }
         fun field(offset: Int): ByteArray {
             val length = r.u16(offset)
             val pos = r.u32(offset + 4).toInt()
@@ -196,11 +200,12 @@ internal class Ntlm(
         val flags = r.i32(60)
 
         // Reject anonymous logons and NTLMv1 (24-byte responses).
-        if (user.isEmpty() || ntResponse.size < 16 + 28) return null
+        if (user.isEmpty()) return null.also { failure = "anonymous logon" }
+        if (ntResponse.size < 16 + 28) return null.also { failure = "NTLMv1 is not accepted" }
         if (!user.equals(username, ignoreCase = true) &&
             !user.substringBefore('@').equals(username, ignoreCase = true)
         ) {
-            return null
+            return null.also { failure = "unknown user '$user'" }
         }
 
         val proof = ntResponse.copyOf(16)
@@ -218,6 +223,7 @@ internal class Ntlm(
             }
             return Result(sessionKey, user, domain, negotiated)
         }
+        failure = "wrong password for '$user'"
         return null
     }
 

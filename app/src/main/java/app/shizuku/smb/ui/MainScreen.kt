@@ -33,7 +33,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -187,9 +189,15 @@ private fun ActivityCard(log: String) {
                 fontFamily = FontFamily.Monospace,
             )
         }
-        if (lines.size > COLLAPSED_LOG_LINES) {
-            TextButton(onClick = { expanded = !expanded }) {
-                Text(if (expanded) "Show less" else "Show all")
+        val clipboard = LocalClipboardManager.current
+        Row {
+            if (lines.size > COLLAPSED_LOG_LINES) {
+                TextButton(onClick = { expanded = !expanded }) {
+                    Text(if (expanded) "Show less" else "Show all")
+                }
+            }
+            TextButton(onClick = { clipboard.setText(AnnotatedString(log)) }) {
+                Text("Copy")
             }
         }
     }

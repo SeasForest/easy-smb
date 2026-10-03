@@ -109,6 +109,6 @@ class ShareService : IShareService.Stub() {
 
     private companion object {
         const val TAG = "EasySmb"
-        const val MAX_LOG_LINES = 50
+        const val MAX_LOG_LINES = 300
     }
 }

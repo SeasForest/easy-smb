@@ -290,6 +290,20 @@ internal class Connection(
     }
 
     private fun dispatch(req: Request, relatedFileId: Long): Reply? {
+        val reply = try {
+            handle(req, relatedFileId)
+        } catch (e: RuntimeException) {
+            // A bug shouldn't take the whole connection down; report it and fail this request.
+            server.log("$client ${Diagnostics.describe(req)} crashed: $e at ${e.stackTrace.take(4).joinToString(" < ")}")
+            return errorReply(Status.INTERNAL_ERROR)
+        }
+        if (reply != null && Diagnostics.worthLogging(reply.status)) {
+            server.log("$client ${Diagnostics.describe(req)} -> ${Diagnostics.statusName(reply.status)}")
+        }
+        return reply
+    }
+
+    private fun handle(req: Request, relatedFileId: Long): Reply? {
         try {
             when (req.command) {
                 Smb2.NEGOTIATE -> return negotiate(req)
@@ -308,6 +322,7 @@ internal class Connection(
                     return errorReply(Status.ACCESS_DENIED)
                 }
             } else {
+                server.log("$client sent an unsigned request")
                 return errorReply(Status.ACCESS_DENIED)
             }
             if (req.command == Smb2.LOGOFF) return logoff(session)
@@ -342,7 +357,7 @@ internal class Connection(
     private fun findOpen(req: Request, at: Int, relatedFileId: Long, tree: Tree): Open {
         val persistent = req.u64(at)
         var volatile = req.u64(at + 8)
-        if (persistent == -1L && volatile == -1L && req.isRelated) volatile = relatedFileId
+        if ((persistent == -1L || volatile == -1L) && req.isRelated) volatile = relatedFileId
         val open = opens[volatile] ?: throw SmbException(Status.FILE_CLOSED)
         if (open.tree !== tree) throw SmbException(Status.FILE_CLOSED)
         return open
@@ -404,6 +419,10 @@ internal class Connection(
         }
         dialect = chosen
         negotiated = true
+        server.log(
+            "$client negotiated ${Diagnostics.dialectName(chosen)} (offered " +
+                offered.sorted().joinToString(" ") { Diagnostics.dialectName(it) } + ")",
+        )
         return Reply(Status.SUCCESS, negotiateBody(chosen, contexts), onSent = { sent ->
             connectionPreauth?.let { connectionPreauth = Crypto.sha512(it, sent) }
         })
@@ -463,7 +482,7 @@ internal class Connection(
         val parsed = try {
             Spnego.parse(token)
         } catch (e: MalformedMessageException) {
-            return failLogon(session)
+            return failLogon(session, "unreadable security token")
         }
         val message = parsed.mechToken
         if (parsed.mechTypes != null) {
@@ -486,7 +505,7 @@ internal class Connection(
                 return moreProcessing(session, Spnego.response(Spnego.ACCEPT_INCOMPLETE, true, null, null))
             }
             type == 3 -> {
-                val result = ntlm.authenticate(message!!) ?: return failLogon(session)
+                val result = ntlm.authenticate(message!!) ?: return failLogon(session, ntlm.failure)
                 session.ntlm = null
                 session.user = result.user
                 session.signingKey = when {
@@ -508,7 +527,7 @@ internal class Connection(
                 }
                 return Reply(Status.SUCCESS, sessionSetupBody(out), sessionId = session.id, signWith = session)
             }
-            else -> return failLogon(session)
+            else -> return failLogon(session, "unsupported security token (NTLM message type $type)")
         }
     }
 
@@ -524,10 +543,10 @@ internal class Connection(
     private fun sessionSetupBody(token: ByteArray): ByteArray =
         ByteWriter().u16(9).u16(0).u16(Smb2.HEADER_SIZE + 8).u16(token.size).bytes(token).toByteArray()
 
-    private fun failLogon(session: Session): Reply {
+    private fun failLogon(session: Session, reason: String): Reply {
         if (!session.valid) sessions.remove(session.id)
         session.ntlm = null
-        server.log("$client failed to log in")
+        server.log("$client failed to log in: $reason")
         authFailures++
         // Slow down password guessing; repeated failures drop the connection.
         Thread.sleep(AUTH_FAILURE_DELAY_MS)
